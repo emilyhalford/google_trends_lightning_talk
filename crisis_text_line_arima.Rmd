@@ -1,0 +1,161 @@
+---
+title: "Crisis Text Line"
+author: "Emily Halford"
+date: "4/8/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Loading packages
+```{r loading_packages}
+
+library('ggplot2')
+library('gtrendsR')
+library('tidyverse')
+library('forecast')
+library('tseries')
+library('boot')
+library('stats')
+
+```
+
+# 'Crisis Text Line'
+
+## Loading "Crisis Text Line" query data
+```{r data_load}
+
+data = read_csv("./data/covid_google_data.csv") %>% 
+  filter(keyword == "crisis text line") %>% 
+  mutate(date = as.Date(date))
+
+training_data = 
+  data %>% 
+  filter(date < "2020-02-29")
+
+```
+
+## Initial plotting/examining of data
+```{r examining}
+
+ggplot(training_data, aes(date, hits)) + geom_line() + scale_x_date(date_breaks = "3 months") + ylab("'Crisis Text Line' Searches") + xlab("") 
+
+```
+
+## Moving average
+```{r moving_average}
+
+training_data$hits_ma = ma(training_data$hits, order = 7)
+
+ggplot() +
+  geom_line(data = training_data, aes(x = date, y = hits, color = "Weekly Search Proportion")) +
+  geom_line(data = training_data, aes(x = date, y = hits_ma, color = "Weekly Moving Average"))
+
+```
+
+## Decomposition
+
+We probably have too little data to accurately decompose seasonality. 
+```{r decomp}
+
+#Seasonality
+hits_ma = ts(na.omit(training_data$hits_ma), frequency = 4)
+decomp = stl(hits_ma, s.window = "periodic")
+deseasonal_hits <- seasadj(decomp)
+plot(decomp) 
+
+#Stationarity
+count1 = diff(hits_ma, differences = 1)
+plot(count1)
+adf.test(count1, alternative = "stationary")
+
+```
+
+## ARIMA 
+```{r ARIMA}
+#Evaluating Arima model
+fit <- auto.arima(hits_ma, seasonal = TRUE)
+tsdisplay(residuals(fit), lag.max = 45, main = '(2,0,1) Model Residuals')
+fit
+
+#ARIMA new parameters [4] 
+fit3 = arima(hits_ma, order = c(0,1,3))
+
+fit3
+
+tsdisplay(residuals(fit3), lag.max = 45, main = '(0,1,3) Model Residuals')
+
+#ARIMA new parameters [6] 
+fit7 = arima(hits_ma, order = c(0,1,7))
+
+fit7
+
+tsdisplay(residuals(fit7), lag.max = 45, main = '(0,1,7) Model Residuals')
+```
+
+```{r forecasting}
+
+#Forecasting
+fcast = forecast(fit, h = 7)
+plot(fcast)
+
+```
+
+```{r forecast_and_observed}
+
+fcastd = as.data.frame(fcast) %>% 
+  mutate(
+    date = seq(from = as.Date("2020-03-01"), to = as.Date("2020-04-18"), by = 'week')
+  )
+
+fcast_observed = 
+  left_join(data, fcastd, by = "date") %>% 
+  janitor::clean_names()
+
+ggplot() + scale_x_date(date_breaks = "2 weeks", minor_breaks = "1 week", date_labels = "%m/%d/%y") +
+  geom_line(data = fcast_observed, aes(x = date, y = hits, color = "Observed Relative Search Proportion")) + geom_line(data = fcast_observed, aes(x = date, y = point_forecast, color = "Forecast with 95% Prediction Interval")) +
+  ylim(0,100) +
+  geom_ribbon(data = fcast_observed, aes(x = date, ymin = lo_95, ymax = hi_95), alpha = .2) +
+  labs(color = "Legend") + 
+  ylab('Relative Search Proportion') + 
+  xlab("") +
+  ggtitle("Google Searches for 'Crisis Text Line'") +
+  theme(axis.text.x = element_text(angle = 65, hjust = 1))
+
+ggsave("./crisis_text_line.jpg", width = 10, height = 5)
+```
+
+# Percent Change
+```{r}
+set.seed(100)
+
+percent_change = 
+  fcast_observed %>% 
+  na.omit(fcast_observed) %>% 
+  mutate(
+    diff = hits - point_forecast,
+    percent_chng = (diff/point_forecast)*100,
+    total_pc = mean(percent_chng)
+  )
+
+boot.mean = function(x, B, binwidth = NULL){
+  n = length(x)
+  boot.samples = matrix(sample(x,size=n*B,replace=TRUE),B,n)
+boot.statistics = apply(boot.samples, 1, mean)
+se = sd(boot.statistics)
+require(ggplot2)
+if(is.null(binwidth))
+  binwidth = diff(range(boot.statistics))/30
+p = ggplot(data.frame(x = boot.statistics), aes(x=x)) +
+  geom_histogram(aes(y = ..density..),binwidth=binwidth) + geom_density(color="red")
+plot(p)
+interval = mean(x) + c(-1,1)*2*se
+print(interval)
+return(list(boot.statistics = boot.statistics, interval=interval, se=se, plot=p))
+}
+
+out = with(percent_change, boot.mean(percent_chng, B = 10000))
+```
+

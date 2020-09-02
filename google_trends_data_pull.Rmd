@@ -1,0 +1,55 @@
+---
+title: "Data Pull with Google Trends"
+author: "Emily Halford"
+date: "9/2/2020"
+output: html_document
+---
+
+First I just load the tidyverse and gtrendsR packages. 
+
+```{r packages, include=FALSE}
+library(tidyverse)
+library(gtrendsR)
+```
+
+This example shows how to use the gtrends() function for a single query. Data for any keyword(s) with sufficient search volume (Google Trends has a stringent privacy threshold) can be pulled. Geo codes can be found to pull data on the metropolitan area, state, country, or worldwide levels. Several options are available for the "time" argument and they are thoroughly explained in the gtrendsR package documentation. Here, I've indicated a custom date range from March 1, 2020 through April 19, 2020. 
+
+```{r single_query_example}
+
+laid_off = gtrends(keyword = "laid off", geo = "US", time = '2019-03-01 2020-04-19')$interest_over_time
+
+```
+
+Below is the actual code that I used to pull data for my study.
+
+First I just read in an excel list of queries representing suicidality and suicide risk factors as a dataframe called "queries." I then pipe that dataframe into a mutate step and use purrr::map() to do what I did for the "laid off" query above for all of my queries at once. 
+
+Commented out is the rest of the exact code that I presented in my Lightning Talk. This code was changed slightly because Google Trends takes a different sample of all Google searches each day, and my most recent sample included "<1" as a data value. This changed the "hits" column from numeric to character, so I needed a bit more code to round these values down to 0 and convert the column back to numeric in order to unnest. 
+
+```{r actual_data_pull}
+
+queries = readxl::read_excel(path = "./covid_queries.xlsx")
+
+google_data = 
+  queries %>% 
+  mutate(
+    data = map(Query, ~(gtrends(.x, geo = "US", time = '2019-03-01 2020-04-19')$interest_over_time))) ##%>% 
+  ##unnest(cols = data) %>% 
+  ##select(keyword, date, hits)
+
+google_data_2 =
+    google_data$data[[9]]$hits = str_replace(google_data$data[[9]]$hits, "<1", "0")
+
+google_data_2 =
+    google_data$data[[9]]$hits = as.numeric(google_data$data[[9]]$hits)
+  
+google_data =
+  google_data %>% 
+  unnest(cols = data) %>% 
+  select(keyword, date, hits) 
+
+write.csv(google_data, file = "./data/covid_google_data.csv")
+
+```
+
+After this data was saved out as a csv, it was used to create an ARIMA model for each query in order to assess changes in search volume associated with the COVID-19 pandemic. Read the full article [here](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0236777). 
